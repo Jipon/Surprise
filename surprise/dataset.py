@@ -169,6 +169,7 @@ class Dataset:
             file_path(:obj:`string`): The path to the file containing ratings.
             reader(:obj:`Reader`): A reader to read the file.
         """
+        print("load_from_file")
 
         return DatasetAutoFolds(ratings_file=file_path, reader=reader)
 
@@ -195,24 +196,6 @@ class Dataset:
         """
 
         return DatasetUserFolds(folds_files=folds_files, reader=reader)
-
-    @classmethod
-    def load_from_df(cls, df, reader):
-        """Load a dataset from a pandas dataframe.
-
-        Use this if you want to use a custom dataset that is stored in a pandas
-        dataframe. See the :ref:`User Guide<load_from_df_example>` for an
-        example.
-
-        Args:
-            df(`Dataframe`): The dataframe containing the ratings. It must have
-                three columns, corresponding to the user (raw) ids, the item
-                (raw) ids, and the ratings, in this order.
-            reader(:obj:`Reader`): A reader to read the file. Only the
-                ``rating_scale`` field needs to be specified.
-        """
-
-        return DatasetAutoFolds(reader=reader, df=df)
 
     def read_ratings(self, file_name):
         """Return a list of ratings (user, item, rating, timestamp) read from
@@ -315,22 +298,13 @@ class DatasetAutoFolds(Dataset):
     cross-validation) are not predefined. (Or for when there are no folds at
     all)."""
 
-    def __init__(self, ratings_file=None, reader=None, df=None):
+    def __init__(self, ratings_file=None, reader=None):
 
         Dataset.__init__(self, reader)
+        self.ratings_file = ratings_file
         self.n_folds = 5
         self.shuffle = True
-
-        if ratings_file is not None:
-            self.ratings_file = ratings_file
-            self.raw_ratings = self.read_ratings(self.ratings_file)
-        elif df is not None:
-            self.df = df
-            self.raw_ratings = [(uid, iid, float(r) + self.reader.offset, None)
-                                for (uid, iid, r) in
-                                self.df.itertuples(index=False)]
-        else:
-            raise ValueError('Must specify ratings file or dataframe.')
+        self.raw_ratings = self.read_ratings(self.ratings_file)
 
     def build_full_trainset(self):
         """Do not split the dataset into folds and just return a trainset as
@@ -342,7 +316,7 @@ class DatasetAutoFolds(Dataset):
         Returns:
             The :class:`Trainset`.
         """
-
+        print("build_full_trainset")
         return self.construct_trainset(self.raw_ratings)
 
     def raw_folds(self):
@@ -409,7 +383,7 @@ class Reader():
             Accepted values are 'ml-100k', 'ml-1m', and 'jester'. Default
             is ``None``.
         line_format(:obj:`string`): The fields names, in the order at which
-            they are encountered on a line. Default is ``'user item rating'``.
+            they are encountered on a line. Example: ``'item user rating'``.
         sep(char): the separator between fields. Example : ``';'``.
         rating_scale(:obj:`tuple`, optional): The rating scale used for every
             rating.  Default is ``(1, 5)``.
@@ -418,7 +392,7 @@ class Reader():
 
     """
 
-    def __init__(self, name=None, line_format='user item rating', sep=None,
+    def __init__(self, name=None, line_format=None, sep=None,
                  rating_scale=(1, 5), skip_lines=0):
 
         if name:
@@ -648,8 +622,7 @@ class Trainset:
         """Generator function to iterate over all ratings.
 
         Yields:
-            A tuple ``(uid, iid, rating)`` where ids are inner ids (see
-            :ref:`this note <raw_inner_note>`).
+            A tuple ``(uid, iid, rating)`` where ids are inner ids.
         """
 
         for u, u_ratings in iteritems(self.ur):
@@ -682,17 +655,133 @@ class Trainset:
         the mean of all ratings :meth:`global_mean
         <surprise.dataset.Trainset.global_mean>`.
         """
-
-        anti_testset = []
+        print("开始build_anti_testset()")
+        anti_testset = []       
+        #count=0
         for u in self.all_users():
+
             for i in self.all_items():
+                #每个user的item列表  
+                #user_items = (j for (j, _) in self.ur[u])
+               # print("i:===",i)
                 user_items = [j for (j, _) in self.ur[u]]
+                #print("user_items",user_items)
                 if i not in user_items:
                     r_ui = (self.to_raw_uid(u), self.to_raw_iid(i),
                             self.global_mean)
                     anti_testset.append(r_ui)
+       # print(anti_testset)
         return anti_testset
+        
+    
+    def build_hit_testdata(self,algo,testpath,k):
+        """
+        @Jipon Chan
+        
+        This method returns  recommended total hit items compare to testsets
+        [Prevent memory overflow, suitable for large amounts of data]
+        
+        testpath: your testsets path
+        k: for each user recommend k items
+        return: hitcounts
+        
+        """
+        #print("build_anti_testset()")
+        anti_testset = []       
+        #sep = ','
+        #fl=open('G:\\08.01\\data\\temp\\temp.txt', 'w')
+         #test dict.
+        testdic={}
+        testdic=self.get_testdict(testpath)
+        #totalcount
+        #totalcount=0
+        hitcounts=0
+        
+        for u in self.all_users():
 
+            user_items = [j for (j, _) in self.ur[u]]
+
+            for i in self.all_items(): 
+                if i not in user_items:
+                    r_ui = (self.to_raw_uid(u), self.to_raw_iid(i),
+                            self.global_mean)
+                   # r_ui = [self.to_raw_uid(u), self.to_raw_iid(i),'0']
+                    #print(r_ui)
+                    """
+                    #self.save_data(r_ui)
+                    fl.write(sep.join(r_ui))
+                    fl.write("\n")
+                    """
+                    anti_testset.append(r_ui)
+            #print(u)
+            #print("anti_testset:",anti_testset)
+            predictions = algo.test(anti_testset)
+            top_k = self.get_top_n(predictions,k)
+              
+            for uid, user_ratings in top_k.items():
+                    
+                itemlist=[iid for (iid, _) in user_ratings]
+                #totalcount=totalcount+len(itemlist)
+                #print(uid,itemlist)       
+                for i in itemlist:
+                    if testdic.get(uid):
+                        hitcounts+=testdic.get(uid).count(i)
+            anti_testset = [] 
+        return hitcounts 
+
+    
+    #read file   
+    def read_file(self,filename):
+        f = open(filename, 'r')
+        d = f.readlines()
+        f.close()
+        return d
+      
+     # get testdict
+    def get_testdict(self,testpath):
+        """
+        According to testset get a dictionary
+        Testdict type is dictionary
+        
+        """
+        data = self.read_file(testpath)  
+        testdic={}       
+        #testcount=len(data)
+        for i in range(len(data)):
+            data_ = data[i].split()        
+            
+            if data_[0] not in testdic:       
+                itemlist=[]
+                itemlist.append(data_[1])
+                testdic[data_[0]]=itemlist      
+            else:                
+                testdic.get(data_[0]).append(data_[1])
+        
+        return testdic
+          
+       
+    def get_top_n(self,predictions, n):
+        """
+        Top-n method,for each user recommend n items
+        
+        """
+    
+        # First map the predictions to each user.
+        top_n = defaultdict(list)
+        
+        
+        for uid, iid, true_r, est, _ in predictions:
+            top_n[uid].append((iid, est))
+        #print(top_n[uid])
+        # Then sort the predictions for each user and retrieve the k highest ones.
+        for uid, user_ratings in top_n.items():
+            print(uid,":",top_n[uid])
+            user_ratings.sort(key=lambda x: x[1], reverse=True)
+            top_n[uid] = user_ratings[:n]
+            
+        return top_n 
+        
+        
     def all_users(self):
         """Generator function to iterate over all users.
 
